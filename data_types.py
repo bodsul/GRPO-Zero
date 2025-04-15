@@ -25,3 +25,13 @@ class MiniBatch:
     prefix_token_ids: List[List[int]]
     numbers: List[List[int]]
     target: List[int]
+
+@dataclass
+class QMiniBatch:
+    """Batch of data for each training step."""
+
+    prefix: List[str]
+    prefix_tokens: List[List[str]]
+    prefix_token_ids: List[List[int]]
+    question: List[str]
+    target: List[str]
