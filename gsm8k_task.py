@@ -42,24 +42,24 @@ class Gsm8k_Task_Dataset:
         return item
 
     def encode_prefix(self, question: str):
-    """Prefix is the *actual* input to the model."""
-    user_message = USER_TEMPLATE.format(question=question)
-    prefix = tokenizer.encode_chat_with_response_prompt(
-        [
-            {"role": "system", "content": SYSTEM_MESSAGE},
-            {"role": "user", "content": user_message},
-        ],
-        RESPONSE_PROMPT,
-    )
-    tokens = tokenizer.tokenize(prefix)
-    return {
-        "prefix": prefix,
-        "prefix_tokens": tokens.tokens,
-        "prefix_token_ids": tokens.ids,
-    }
+        """Prefix is the *actual* input to the model."""
+        user_message = USER_TEMPLATE.format(question=question)
+        prefix = self.tokenizer.encode_chat_with_response_prompt(
+            [
+                {"role": "system", "content": SYSTEM_MESSAGE},
+                {"role": "user", "content": user_message},
+            ],
+            RESPONSE_PROMPT,
+        )
+        tokens = self.tokenizer.tokenize(prefix)
+        return {
+            "prefix": prefix,
+            "prefix_tokens": tokens.tokens,
+            "prefix_token_ids": tokens.ids,
+        }
 
     @staticmethod
-    def collate_fn(batch: List[Dict[str, Any]]) -> MiniBatch:
+    def collate_fn(batch: List[Dict[str, Any]]) -> QMiniBatch:
         """Collate examples into a batch."""
         question = [item["question"] for item in batch]
         target = [item["answer"] for item in batch]
@@ -100,7 +100,7 @@ def extract_solution(solution_str, method='strict'):
     return final_answer
 
 
-def compute_score(solution_str, ground_truth, method='strict', format_score=0., score=1.):
+def compute_score(solution_str, ground_truth, end_token=None, method='strict', format_score=0.1, score=1.):
     """The scoring function for GSM8k.
 
     Reference: Trung, Luong, et al. "Reft: Reasoning with reinforced fine-tuning." Proceedings of the 62nd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers). 2024.
@@ -114,11 +114,31 @@ def compute_score(solution_str, ground_truth, method='strict', format_score=0., 
     """
     ground_truth = extract_solution(solution_str=ground_truth, method='strict')
     assert ground_truth is not None
+
+    # Strip end token if present
+    if end_token and solution_str.endswith(end_token):
+        solution_str = solution_str[: -len(end_token)]
+
     answer = extract_solution(solution_str=solution_str, method=method)
     if answer is None:
-        return 0
+        r_score, r_format_score=0, 0
     else:
         if answer == ground_truth:
-            return score
+            r_score, r_format_score=score, format_score
         else:
-            return format_score
+            r_score, r_format_score=0, format_score
+
+    return {
+        "reward": r_score+r_format_score,
+        "reward_info": {
+            "format_reward": r_format_score,
+            "answer_reward": r_score,
+        },
+    }
+
+def gsm8k_reward_function_dispatcher(response, batch, end_token, i):
+    return compute_score(
+                solution_str=response,
+                ground_truth=batch.target[i],
+                end_token=end_token,
+            )

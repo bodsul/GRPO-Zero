@@ -94,9 +94,9 @@ def rollout(
             generated_text = tokenizer.detokenize(generated_token_ids)
             rewards = reward_function(
                 response=generated_text,
-                numbers=batch.numbers[i],
-                target=batch.target[i],
+                batch=batch,
                 end_token=end_token,
+                i=i
             )
             episode = Episode(
                 prefix=batch.prefix[i],

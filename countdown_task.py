@@ -164,3 +164,11 @@ def reward_function(
             "answer_reward": answer_reward,
         },
     }
+
+def reward_function_dispatcher(response, batch, end_token, i):
+    return reward_function(
+                response=generated_text,
+                numbers=batch.numbers[i],
+                target=batch.target[i],
+                end_token=end_token,
+            )
