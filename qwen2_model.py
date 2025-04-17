@@ -113,6 +113,10 @@ class Attention(nn.Module):
         self.register_buffer("cache_k", cache_k, persistent=False)
         self.register_buffer("cache_v", cache_v, persistent=False)
 
+    def update_kv_cache_for_beam_search(self, idxs: torch.tensor):
+        self.cache_k = self.cache_k[idxs]
+        self.cache_v = self.cache_v[idxs]
+
     def del_kv_cache(self):
         self.cache_k = None
         self.cache_v = None
@@ -299,6 +303,10 @@ class Transformer(nn.Module):
                 max_batch_size, max_seq_len, dtype=dtype, device=device
             )
 
+    def update_kv_cache_for_beam_search(self, idxs: torch.tensor):
+        for layer in self.layers:
+            layer.self_attn.update_kv_cache_for_beam_search(idxs)
+            
     def del_kv_cache(self):
         for layer in self.layers:
             layer.self_attn.del_kv_cache()
