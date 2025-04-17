@@ -12,9 +12,9 @@ import torch
 from torch.utils.data import DataLoader
 
 from data_types import Episode, QMiniBatch
-from qwen2_model import Transformer
+from qwen2_model import Transformer, Qwen2Config
 from tokenizer import Tokenizer
-from gsm8k_task import Gsm8k_Task_Dataset
+from gsm8k_task import Gsm8k_Task_Dataset, gsm8k_reward_function_dispatcher
 
 @torch.no_grad()
 def generate(model: Transformer,
@@ -80,7 +80,7 @@ def generate(model: Transformer,
     responses = []
 
     for i in range(bsz):
-        first_generated_token = tokens_list[i][len(batch.prefix_token_ids[i])]
+        # first_generated_token = tokens_list[i][len(batch.prefix_token_ids[i])]
         generated_token_ids = tokens_list[i][len(batch.prefix_token_ids[i]) :]
         # remove padding tokens
         if pad_token_id in generated_token_ids:
@@ -133,7 +133,11 @@ def generate_beam_search(model: Transformer,
     assert min_prompt_len < total_len
     is_finished = torch.zeros((bsz,), dtype=torch.bool, device=device)
     
-    running_log_p_sum = torch.zeros((bsz,), dtype=torch.float32, device=device)
+    running_log_p_sum = torch.zeros((bsz,), dtype=dtype, device=device)
+    vocab_size = Qwen2Config.vocab_size
+    vocab_mask = torch.zeros((len(batch.prefix), vocab_size*num_hypothesis), dtype=torch.bool, device=device)
+    vocab_mask[:, vocab_size:] = True
+
     for cur_pos in range(min_prompt_len, total_len):
         print(
             f"\r* Generating response: {cur_pos-min_prompt_len:>4d}/{total_len-min_prompt_len:>4d}",
@@ -143,7 +147,6 @@ def generate_beam_search(model: Transformer,
         with torch.autocast(device_type=device.type, dtype=dtype):
             logits = model.inference(tokens[:, prev_pos:cur_pos], prev_pos)
         probs = torch.softmax(logits[:, -1], dim=-1) # (b*n, v)
-        _, vocab_size = probs.shape
         if len(probs[is_finished]) != 0:
             probs[is_finished] = 0 
             probs[is_finished][:, end_token_id] = 1
@@ -151,17 +154,14 @@ def generate_beam_search(model: Transformer,
         log_probs_tot += running_log_p_sum.unsqueeze(-1)
         log_probs_tot = log_probs_tot.reshape(-1)
         log_probs_tot = log_probs_tot.reshape(len(batch.prefix), num_hypothesis*vocab_size)
-        
-        print(log_probs_tot)
-        log_probs_tot[torch.logical_not(input_text_mask)[::num_hypothesis, cur_pos]][:, vocab_size:] = -torch.inf
-        print(log_probs_tot)
+        log_probs_tot = torch.where(input_text_mask[::num_hypothesis, cur_pos-1].unsqueeze(-1) & vocab_mask, -torch.inf, log_probs_tot)
         top_k = torch.topk(log_probs_tot, k=num_hypothesis, dim=-1) # (b, n)
 
         top_k_indices = top_k.indices
         top_k_values = top_k.values
-        print(top_k_values)
-        print(top_k_indices)
-        exit()
+        # print(top_k_values)
+        # print(vocab_size)
+        # print(top_k_indices)
         top_k_vocab_indices = top_k_indices % vocab_size
         top_k_row_indices = top_k_indices // vocab_size + (torch.arange(len(batch.prefix))*num_hypothesis).unsqueeze(-1)
 
@@ -178,7 +178,7 @@ def generate_beam_search(model: Transformer,
         next_token = torch.where(
             input_text_mask[:, cur_pos], tokens[:, cur_pos], next_token
         )
-        running_log_p_sum = torch.where(torch.logical_not(input_text_mask[:, cur_pos]), 0, running_log_p_sum)
+        running_log_p_sum = torch.where(input_text_mask[:, cur_pos], 0, running_log_p_sum)
         # if a generation is finished, we fill the rest of the tokens with pad_token_id
         next_token = torch.where(is_finished, pad_token_id, next_token)
         tokens[:, cur_pos] = next_token
@@ -244,23 +244,28 @@ def run(config_path):
     model = Transformer.from_pretrained(pretrained_model_path, device=device).train()
     step = 200
     output_file = ckpt_dir / f"ckpt_{step:06d}.pt"
-    # model.load_state_dict(torch.load(output_file))
+    model.load_state_dict(torch.load(output_file))
     max_gen_len=config["training"]["max_gen_len"] * 2
+    tot_reward = 0
+    n_instances = 0
     for _, batch in enumerate(dataloader):
         # responses = generate(model, batch, tokenizer, max_gen_len, device, dtype)
         responses = generate_beam_search(model, batch, tokenizer, max_gen_len, device, dtype, 4)
-
         for i in range(len(batch.prefix)):
-            print(responses[i])
-            # break
-            # if responses[i]=='':
-            #     print('Empty Response')
-            #     print('\n')
-            # else:
-            #     print(f'Question: {batch.question[i]}, Target: {batch.target[i]}, Response: {responses[i]}')
-            #     print('\n')
+            responses[i].sort(key=lambda x: x['score'])
+            best_response = (responses[i][-1]['response'])
     
+            rewards = gsm8k_reward_function_dispatcher(
+                    response=best_response,
+                    batch=batch,
+                    end_token=tokenizer.eos_token,
+                    i=i
+                )
+            tot_reward+=rewards["reward_info"]["answer_reward"]
+            n_instances+=1
         break
+    print(f'avg_reward: {tot_reward/n_instances}')
+
 
 if __name__=='__main__':
     run('gsm8k_config.yaml')
