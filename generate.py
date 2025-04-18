@@ -67,7 +67,9 @@ def generate(model: Transformer,
         next_token = torch.where(is_finished, pad_token_id, next_token)
         tokens[:, cur_pos] = next_token
         if end_token_id is not None:
-            is_finished = is_finished | (next_token == end_token_id)
+            is_end_token = next_token == end_token_id
+            is_generated_token = ~input_text_mask[:, cur_pos]
+            is_finished = is_finished | (is_end_token & is_generated_token)
         prev_pos = cur_pos
         if is_finished.all():
             break
@@ -92,7 +94,7 @@ def generate(model: Transformer,
         #     print('Fail', batch.prefix[i])
         # else:
         #     print('Pass', batch.prefix[i])
-        responses.append(generated_text)
+        responses.append([{'response': generated_text, 'score': 0}])
     
     # exit()
     return responses
@@ -155,7 +157,7 @@ def generate_beam_search(model: Transformer,
         log_probs_tot = log_probs_tot.reshape(-1)
         log_probs_tot = log_probs_tot.reshape(len(batch.prefix), num_hypothesis*vocab_size)
         log_probs_tot = torch.where(input_text_mask[::num_hypothesis, cur_pos-1].unsqueeze(-1) & vocab_mask, -torch.inf, log_probs_tot)
-        top_k = torch.topk(log_probs_tot, k=num_hypothesis, dim=-1) # (b, n)
+        top_k = torch.topk(log_probs_tot.unsqueeze(-1), k=num_hypothesis, dim=-1) # (b, n)
 
         top_k_indices = top_k.indices
         top_k_values = top_k.values
@@ -183,7 +185,9 @@ def generate_beam_search(model: Transformer,
         next_token = torch.where(is_finished, pad_token_id, next_token)
         tokens[:, cur_pos] = next_token
         if end_token_id is not None:
-            is_finished = is_finished | (next_token == end_token_id)
+            is_end_token = next_token == end_token_id
+            is_generated_token = ~input_text_mask[:, cur_pos]
+            is_finished = is_finished | (is_end_token & is_generated_token)
         prev_pos = cur_pos
         if is_finished.all():
             break
@@ -207,7 +211,7 @@ def generate_beam_search(model: Transformer,
                 ]
             generated_text = tokenizer.detokenize(generated_token_ids)
             this_responses.append({'response': generated_text, 'score': running_log_p_sum[k].item()})
-            responses.append(this_responses)
+        responses.append(this_responses)
     
     return responses
 
@@ -232,29 +236,29 @@ def run(config_path):
     dataset = Gsm8k_Task_Dataset(
     data_path=config["data"]["path"],
     tokenizer=tokenizer,
-    split="train",
+    split="test",
     test_size=config["data"]["test_size"],
 )
     dataloader = DataLoader(
         dataset,
         collate_fn=Gsm8k_Task_Dataset.collate_fn,
-        batch_size=BATCH_SIZE//32,
+        batch_size=BATCH_SIZE//4,
     )
 
     model = Transformer.from_pretrained(pretrained_model_path, device=device).train()
     step = 200
     output_file = ckpt_dir / f"ckpt_{step:06d}.pt"
-    model.load_state_dict(torch.load(output_file))
+    # model.load_state_dict(torch.load(output_file))
     max_gen_len=config["training"]["max_gen_len"] * 2
     tot_reward = 0
     n_instances = 0
-    for _, batch in enumerate(dataloader):
-        # responses = generate(model, batch, tokenizer, max_gen_len, device, dtype)
-        responses = generate_beam_search(model, batch, tokenizer, max_gen_len, device, dtype, 4)
+    for j, batch in enumerate(dataloader):
+        responses = generate(model, batch, tokenizer, max_gen_len, device, dtype)
+        # responses = generate_beam_search(model, batch, tokenizer, max_gen_len, device, dtype, 4)
         for i in range(len(batch.prefix)):
             responses[i].sort(key=lambda x: x['score'])
             best_response = (responses[i][-1]['response'])
-    
+
             rewards = gsm8k_reward_function_dispatcher(
                     response=best_response,
                     batch=batch,
@@ -263,7 +267,8 @@ def run(config_path):
                 )
             tot_reward+=rewards["reward_info"]["answer_reward"]
             n_instances+=1
-        break
+        print(f'answer_reward: {rewards["reward_info"]["answer_reward"]}')
+        print(f'curr_avg_reward: {tot_reward/n_instances}')
     print(f'avg_reward: {tot_reward/n_instances}')
 
 

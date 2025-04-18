@@ -14,7 +14,7 @@ SYSTEM_MESSAGE = (
 )
 USER_TEMPLATE = (
     "{question} "
-    "The final answer should be prefixed with #### and should appear after the reasoning"
+    "The final answer should be prefixed with #### and should appear after the reasoning." 
 )
 RESPONSE_PROMPT = "Let me solve this step by step."
 
