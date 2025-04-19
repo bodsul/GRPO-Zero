@@ -1,9 +1,7 @@
 import re
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import pandas as pd
-from torch.utils.data import Dataset
+from task_data import Task_Dataset
 
 from data_types import QMiniBatch
 from tokenizer import Tokenizer
@@ -18,7 +16,7 @@ USER_TEMPLATE = (
 )
 RESPONSE_PROMPT = "Let me solve this step by step."
 
-class Gsm8k_Task_Dataset:
+class Gsm8k_Task_Dataset(Task_Dataset):
     def __init__(
         self,
         tokenizer: Tokenizer,
@@ -26,15 +24,8 @@ class Gsm8k_Task_Dataset:
         split: str = "train",
         test_size: int = 100,
     ):
-        data = pd.read_parquet(Path(data_path) / "main")
-                # use the last `test_size` examples for testing
-        self.data = (
-            data.iloc[:-test_size] if split == "train" else data.iloc[-test_size:]
-        )
-        self.tokenizer = tokenizer
+       super(Gsm8k_Task_Dataset, self).__init__(tokenizer, data_path, 'main', split, test_size)
     
-    def __len__(self):
-        return len(self.data)
 
     def __getitem__(self, idx):
         item = self.data.iloc[idx].to_dict()
@@ -73,6 +64,7 @@ class Gsm8k_Task_Dataset:
             prefix_tokens=prefix_tokens,
             prefix_token_ids=prefix_token_ids,
         )
+
 
 def extract_solution(solution_str, method='strict'):
     assert method in ['strict', 'flexible']
@@ -136,7 +128,7 @@ def compute_score(solution_str, ground_truth, end_token=None, method='strict', f
         },
     }
 
-def gsm8k_reward_function_dispatcher(response, batch, end_token, i):
+def reward_function_dispatcher(response, batch, end_token, i):
     return compute_score(
                 solution_str=response,
                 ground_truth=batch.target[i],

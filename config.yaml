@@ -4,6 +4,7 @@ model:
   dtype: "bfloat16"
 data:
   path: "Countdown-Tasks-3to4"
+  name: "countdown_task_data"
   test_size: 128
 training:
   random_seed: 1337

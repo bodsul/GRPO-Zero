@@ -83,6 +83,14 @@ uv run train.py
 # train the model with a 24GB VRAM GPU (e.g., an RTX 4090 GPU)
 uv run train.py --config config_24GB.yaml
 ```
+
+## Training on other datasets
+To train on other datasets. Implement a pytorch dataset for your dataset for example by subclassing `task_data.Task_Dataset`. Implement a `reward_function_dispatcher` and create a `config.yaml` for your dataset. An example with the [GSM8K dataset](https://github.com/openai/grade-school-math) can
+be found in `gsm8k_task.py` with sample config in `gam8k_config.yaml`.
+
+## Generating responses after training
+Greedy search and beam search generation strategies are implemented in `generate.py`. To implement your own generation strategies, you can build upon this and subclass `generator.TokensGenerator.py`
+
 ## Acknowledgements
 
 This project builds upon the work of several outstanding projects:

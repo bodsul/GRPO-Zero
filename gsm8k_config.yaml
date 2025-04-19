@@ -3,6 +3,7 @@ model:
   device: "cuda"
   dtype: "bfloat16"
 data:
+  name: "gsm8k_task_data"
   path: "gsm8k"
   test_size: 1319
 training:

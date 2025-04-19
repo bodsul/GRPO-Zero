@@ -1,9 +1,7 @@
 import re
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import pandas as pd
-from torch.utils.data import Dataset
+from task_data import Task_Dataset
 
 from data_types import MiniBatch
 from tokenizer import Tokenizer
@@ -21,7 +19,7 @@ USER_TEMPLATE = (
 RESPONSE_PROMPT = "Let me solve this step by step.\n<think>"
 
 
-class CountdownTasksDataset(Dataset):
+class CountdownTasksDataset(Task_Dataset):
     """Prepare Countdown Tasks for training"""
 
     def __init__(
@@ -31,15 +29,8 @@ class CountdownTasksDataset(Dataset):
         split: str = "train",
         test_size: int = 100,
     ):
-        data = pd.read_parquet(Path(data_path) / "data")
-        # use the last `test_size` examples for testing
-        self.data = (
-            data.iloc[:-test_size] if split == "train" else data.iloc[-test_size:]
-        )
-        self.tokenizer = tokenizer
-
-    def __len__(self):
-        return len(self.data)
+        super(CountdownTasksDataset, self).__init__(tokenizer, data_path, 'data', split, test_size)
+    
 
     def __getitem__(self, idx):
         item = self.data.iloc[idx].to_dict()
@@ -167,7 +158,7 @@ def reward_function(
 
 def reward_function_dispatcher(response, batch, end_token, i):
     return reward_function(
-                response=generated_text,
+                response=response,
                 numbers=batch.numbers[i],
                 target=batch.target[i],
                 end_token=end_token,

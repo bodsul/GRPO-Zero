@@ -10,7 +10,68 @@ import torch
 from data_types import Episode, MiniBatch
 from qwen2_model import Transformer
 from tokenizer import Tokenizer
+from generator import TokensGenerator
 
+class RolloutGenerator(TokensGenerator):
+    def __init__(self, model: Transformer,
+        batch: MiniBatch,
+        tokenizer: Tokenizer,
+        max_gen_len: int,
+        num_answer_per_question: int,
+        device: torch.device,
+        dtype: torch.dtype,):
+        super(RolloutGenerator, self).__init__(model, batch, tokenizer, max_gen_len, num_answer_per_question, device, dtype)
+    
+    @torch.no_grad()
+    def generate_tokens(self):
+        for cur_pos in range(self.min_prompt_len, self.total_len):
+            probs = self.get_probs(cur_pos)
+            next_token = torch.multinomial(probs, num_samples=1)
+            next_token = next_token.reshape(-1)
+            if not self.update_tokens(next_token, cur_pos):
+                break
+        self.cleanup()
+
+    def get_processed_generated_tokens(self, **kwargs)-> List[Episode]:
+        self.generate_tokens()
+        reward_function = kwargs['reward_function']
+        is_finished_list = self.is_finished.tolist()
+        tokens_list = self.tokens.tolist()
+        pad_token_id = self.tokenizer.pad_token_id
+        end_token = self.tokenizer.eos_token
+
+        # prepare the output episodes
+        episodes = []
+        for i in range(self.bsz // self.num_answer_per_question):
+            for j in range(self.num_answer_per_question):
+                idx = i * self.num_answer_per_question + j
+                generated_token_ids = tokens_list[idx][len(self.batch.prefix_token_ids[i]) :]
+                # remove padding tokens
+                if pad_token_id in generated_token_ids:
+                    generated_token_ids = generated_token_ids[
+                        : generated_token_ids.index(pad_token_id)
+                    ]
+                generated_text = self.tokenizer.detokenize(generated_token_ids)
+                rewards = reward_function(
+                    response=generated_text,
+                    batch=self.batch,
+                    end_token=end_token,
+                    i=i,
+                )
+                episode = Episode(
+                    prefix=self.batch.prefix[i],
+                    text=self.batch.prefix[i] + generated_text,
+                    prefix_token_ids=self.batch.prefix_token_ids[i],
+                    prefix_tokens=self.batch.prefix_tokens[i],
+                    generated_token_ids=generated_token_ids,
+                    is_finished=is_finished_list[idx],
+                    reward=rewards["reward"],
+                    reward_info=rewards["reward_info"],
+                )
+                episodes.append(episode)
+        # clear the output line
+        print("\r", end=" " * 100, flush=True)
+        return episodes
 
 @torch.no_grad()
 def rollout(

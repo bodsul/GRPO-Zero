@@ -10,16 +10,16 @@ import yaml
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard.writer import SummaryWriter
 
-from countdown_task import CountdownTasksDataset, reward_function
-from gsm8k_task import Gsm8k_Task_Dataset, gsm8k_reward_function_dispatcher
-from grpo import rollout, update_policy
+from factory import create_dataset, reward_function_dispatcher
+from grpo import rollout, RolloutGenerator, update_policy
 from optimizer import MemoryEfficientAdamW
 from qwen2_model import Transformer
 from tokenizer import Tokenizer
 
 
 def evaluate(model, tokenizer, device, dtype, config):
-    test_dataset = Gsm8k_Task_Dataset(
+    test_dataset = create_dataset(
+        dataset=config["data"]["name"],
         data_path=config["data"]["path"],
         tokenizer=tokenizer,
         split="test",
@@ -31,7 +31,7 @@ def evaluate(model, tokenizer, device, dtype, config):
     dataloader = DataLoader(
         test_dataset,
         shuffle=False,
-        collate_fn=Gsm8k_Task_Dataset.collate_fn,
+        collate_fn=test_dataset.__class__.collate_fn,
         generator=generator,
         batch_size=config["training"]["batch_size"] // 2,
         drop_last=False,
@@ -44,7 +44,7 @@ def evaluate(model, tokenizer, device, dtype, config):
             batch=batch,
             max_gen_len=config["training"]["max_gen_len"] * 2,
             num_answer_per_question=1,
-            reward_function=gsm8k_reward_function_dispatcher,
+            reward_function=reward_function_dispatcher(config["data"]["name"]),
             device=device,
             dtype=dtype,
         )
@@ -74,7 +74,7 @@ def main(config_path: str):
     tb_writer = SummaryWriter(log_dir=f"{config['training']['log_dir']}/{current_time}")
     tokenizer = Tokenizer(str(pretrained_model_path / "tokenizer.json"))
 
-    train_dataset = Gsm8k_Task_Dataset(
+    train_dataset = create_dataset(dataset=config["data"]["name"],
         data_path=config["data"]["path"],
         tokenizer=tokenizer,
         split="train",
@@ -84,7 +84,7 @@ def main(config_path: str):
     train_dataloader = DataLoader(
         train_dataset,
         shuffle=True,
-        collate_fn=Gsm8k_Task_Dataset.collate_fn,
+        collate_fn=train_dataset.__class__.collate_fn,
         generator=generator,
         batch_size=NUM_QUESTIONS_PER_BATCH,
     )
@@ -104,15 +104,15 @@ def main(config_path: str):
     ckpt_dir.mkdir(parents=True, exist_ok=True)
 
     for step, batch in enumerate(train_dataloader, start=1):
-        episodes = rollout(
-            model=model,
+        rollout_generator = RolloutGenerator(model=model,
             tokenizer=tokenizer,
             batch=batch,
             max_gen_len=config["training"]["max_gen_len"],
             num_answer_per_question=NUM_ANSWERS_PER_QUESTION,
-            reward_function=gsm8k_reward_function_dispatcher,
             device=device,
-            dtype=dtype,
+            dtype=dtype,)
+        episodes = rollout_generator.get_processed_generated_tokens(
+            reward_function=reward_function_dispatcher(config["data"]["name"]),
         )
         if config["training"]["skip_unfinished_episodes"]:
             episodes = [episode for episode in episodes if episode.is_finished]
